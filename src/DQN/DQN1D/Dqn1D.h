@@ -15,10 +15,17 @@ class Dqn1D : public torch::nn::Module {
   torch::nn::Dropout *dropoutSubmodule = nullptr;
   torch::nn::Linear *linearSubmodule = nullptr;
 
-  std::vector<int64_t> get_interims(int64_t imageDims,
+  bool usePadding_;
+
+  static std::vector<int64_t> get_interims(int64_t imageDims,
                                     std::vector<int64_t> &kernelSizes,
                                     std::vector<int64_t> &stridesSizes,
                                     std::vector<int64_t> &dilationSizes);
+
+  static std::vector<int64_t> compute_padding(int64_t imageDims,
+                                       std::vector<int64_t> &kernelSizes,
+                                       std::vector<int64_t> &stridesSizes,
+                                       std::vector<int64_t> &dilationSizes);
 
   void setupModel(int64_t &imageDims,
                   std::vector<int64_t> &channels,
@@ -37,11 +44,13 @@ class Dqn1D : public torch::nn::Module {
     std::vector<int64_t> &dilationSizes,
     std::string &activation,
     float_t dropout,
-    int64_t numActions);
+    int64_t numActions,
+    bool usePadding = true);
 
-  ~Dqn1D();
+  ~Dqn1D() override;
 
   torch::Tensor forward(torch::Tensor x);
+  void to_double();
 };}// namespace dqn
 
 #endif//RLPACK_DQN_DQN1D_DQN1D_H_

@@ -11,11 +11,11 @@ class AgentImpl{
 
  public:
   AgentImpl();
-  virtual int train(torch::Tensor &stateCurrent, torch::Tensor &stateNext, int64_t reward, int action, int done);
+  virtual int train(torch::Tensor &stateCurrent, torch::Tensor &stateNext, float reward, int action, int done);
   virtual int policy(torch::Tensor &stateCurrent);
 };
 
-int AgentImpl::train(torch::Tensor &stateCurrent, torch::Tensor &stateNext, int64_t reward, int action, int done){
+int AgentImpl::train(torch::Tensor &stateCurrent, torch::Tensor &stateNext, float reward, int action, int done){
   return 0;
 }
 

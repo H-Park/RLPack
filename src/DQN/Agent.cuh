@@ -15,9 +15,9 @@ namespace dqn {
 template<class ModelClass, class Optimizer>
 class Agent : public AgentImpl {
 
-  ModelClass *targetModel_;
-  ModelClass *policyModel_;
-  Optimizer *optimizer_;
+  ModelClass targetModel_;
+  ModelClass policyModel_;
+  Optimizer optimizer_;
   float gamma_;
   float epsilon_;
   float epsilonDecayRate_;
@@ -42,7 +42,7 @@ class Agent : public AgentImpl {
     ~Memory();
     void push_back(torch::Tensor &stateCurrent,
                    torch::Tensor &stateNext,
-                   int64_t reward,
+                   float reward,
                    int action,
                    int done);
     void push_back(Memory *memory);
@@ -80,8 +80,8 @@ class Agent : public AgentImpl {
         std::string &savePath);
   ~Agent();
 
-  int train(torch::Tensor &stateCurrent, torch::Tensor &stateNext, int64_t reward, int action, int done);
-  int policy(torch::Tensor &stateCurrent);
+  int train(torch::Tensor &stateCurrent, torch::Tensor &stateNext, float reward, int action, int done) override;
+  int policy(torch::Tensor &stateCurrent) override;
 };
 
 template<class ModelClass, class Optimizer>
@@ -90,20 +90,23 @@ Agent<ModelClass, Optimizer>::Memory::Memory() = default;
 template<class ModelClass, class Optimizer>
 void Agent<ModelClass, Optimizer>::Memory::push_back(torch::Tensor &stateCurrent,
                                                      torch::Tensor &stateNext,
-                                                     int64_t reward,
+                                                     float reward,
                                                      int action,
                                                      int done) {
+
   stateCurrent_.push_back(stateCurrent);
   stateNext_.push_back(stateNext);
 
-  torch::TensorOptions tensorOptions = torch::TensorOptions().dtype(torch::kFloat64);
-  torch::Tensor rewardAsTensor = torch::full({1, 1}, reward, tensorOptions);
+  torch::TensorOptions tensorOptionsForReward = torch::TensorOptions().dtype(torch::kDouble);
+  torch::Tensor rewardAsTensor = torch::full({1}, reward, tensorOptionsForReward);
   reward_.push_back(rewardAsTensor);
 
-  torch::Tensor actionAsTensor = torch::full({1, 1}, action, tensorOptions);
+  torch::TensorOptions tensorOptionsForAction = torch::TensorOptions().dtype(torch::kInt64);
+  torch::Tensor actionAsTensor = torch::full({1}, action, tensorOptionsForAction);
   action_.push_back(actionAsTensor);
 
-  torch::Tensor doneAsTensor = torch::full({1, 1}, done, tensorOptions);
+  torch::TensorOptions tensorOptionsForDone = torch::TensorOptions().dtype(torch::kDouble);
+  torch::Tensor doneAsTensor = torch::full({1}, done, tensorOptionsForDone);
   done_.push_back(doneAsTensor);
 }
 
@@ -139,27 +142,27 @@ void Agent<ModelClass, Optimizer>::Memory::push_back(typename Agent<ModelClass, 
 
 template<class ModelClass, class Optimizer>
 torch::Tensor Agent<ModelClass, Optimizer>::Memory::stack_current_states() {
-  return torch::stack(stateCurrent_);
+  return torch::stack(stateCurrent_, 0);
 }
 
 template<class ModelClass, class Optimizer>
 torch::Tensor Agent<ModelClass, Optimizer>::Memory::stack_next_states() {
-  return torch::stack(stateNext_);
+  return torch::stack(stateNext_, 0);
 }
 
 template<class ModelClass, class Optimizer>
 torch::Tensor Agent<ModelClass, Optimizer>::Memory::stack_rewards() {
-  return torch::stack(reward_);
+  return torch::stack(reward_, 0);
 }
 
 template<class ModelClass, class Optimizer>
 torch::Tensor Agent<ModelClass, Optimizer>::Memory::stack_actions() {
-  return torch::stack(action_);
+  return torch::stack(action_, 0);
 }
 
 template<class ModelClass, class Optimizer>
 torch::Tensor Agent<ModelClass, Optimizer>::Memory::stack_dones() {
-  return torch::stack(done_);
+  return torch::stack(done_, 0);
 }
 
 template<class ModelClass, class Optimizer>
@@ -178,9 +181,9 @@ Agent<ModelClass, Optimizer>::Agent(ModelClass &targetModel,
                                     int policyModelUpdateRate,
                                     int numActions,
                                     std::string &savePath) {
-  targetModel_ = &targetModel;
-  policyModel_ = &policyModel;
-  optimizer_ = &optimizer;
+  targetModel_ = targetModel;
+  policyModel_ = policyModel;
+  optimizer_ = optimizer;
 
   gamma_ = gamma;
   epsilon_ = epsilon;
@@ -192,13 +195,13 @@ Agent<ModelClass, Optimizer>::Agent(ModelClass &targetModel,
   policyModelUpdateRate_ = policyModelUpdateRate;
   numActions_ = numActions;
 
-  savePath_ = savePath;
+  savePath_ = savePath.append("tmp.pth");
 }
 
 template<class ModelClass, class Optimizer>
 int Agent<ModelClass, Optimizer>::train(torch::Tensor &stateCurrent,
                                         torch::Tensor &stateNext,
-                                        int64_t reward,
+                                        float reward,
                                         int action,
                                         int done) {
 
@@ -224,6 +227,7 @@ int Agent<ModelClass, Optimizer>::train(torch::Tensor &stateCurrent,
     decay_epsilon();
   }
 
+  stateCurrent = stateCurrent.unsqueeze(0);
   action = policy(stateCurrent);
   return action;
 }
@@ -247,12 +251,11 @@ void Agent<ModelClass, Optimizer>::train_policy_model() {
     torch::Tensor qValuesTarget = targetModel_->forward(statesNext);
     tdValue = temporal_difference(rewards, qValuesTarget, dones);
   }
-
   torch::Tensor qValuesPolicy = policyModel_->forward(statesCurrent);
   torch::Tensor qValuesPolicyGathered = qValuesPolicy.gather(-1, actions);
 
   optimizer_->zero_grad();
-  torch::Tensor loss = huberLoss_(tdValue, qValuesPolicyGathered);
+  torch::Tensor loss = huberLoss_(tdValue.detach(), qValuesPolicyGathered);
   loss.backward();
   optimizer_->step();
 }
@@ -272,15 +275,14 @@ void Agent<ModelClass, Optimizer>::update_target_model() {
 template<class ModelClass, class Optimizer>
 typename Agent<ModelClass, Optimizer>::Memory *Agent<ModelClass, Optimizer>::load_random_experiences() {
   std::vector<int> loadedIndices;
-  std::vector<torch::Tensor> memoryBufferTensors;
   std::random_device rd;
   std::mt19937 generator(rd());
   int index;
 
   auto *loadedExperiences = new Memory();
 
-  while (memoryBufferTensors.size() != policyModelUpdateRate_) {
-    std::uniform_int_distribution<int> distribution(0, memoryBuffer.size());
+  while (loadedExperiences->size() != policyModelUpdateRate_) {
+    std::uniform_int_distribution<int> distribution(0, memoryBuffer.size() - 1);
     index = distribution(generator);
 
     Memory *memory = memoryBuffer.at(index);
@@ -304,7 +306,7 @@ int Agent<ModelClass, Optimizer>::policy(torch::Tensor &stateCurrent) {
   std::random_device rd;
   std::mt19937 generator(rd());
   std::uniform_real_distribution<float> distributionP(0, 1);
-  std::uniform_real_distribution<int> distributionAction(0, numActions_);
+  std::uniform_int_distribution<int> distributionAction(0, numActions_ - 1);
   float p = distributionP(generator);
 
   if (p < epsilon_) {
@@ -313,7 +315,7 @@ int Agent<ModelClass, Optimizer>::policy(torch::Tensor &stateCurrent) {
     {
       policyModel_->eval();
       torch::NoGradGuard guard;
-      torch::Tensor qValues = policyModel_->forward(stateCurrent);
+      torch::Tensor qValues = policyModel_->forward(stateCurrent.toType(torch::kDouble));
       torch::Tensor actionTensor = qValues.argmax(-1);
       action = actionTensor.item<int>();
     }
